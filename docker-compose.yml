@@ -48,6 +48,32 @@
     volumes:
       - mongodb_data:/data/db
 
+  inventory-service:
+    build:
+      context: ./src/InventoryService
+      dockerfile: Dockerfile
+    container_name: inventory-service
+    ports:
+      - "8082:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: Server=inventory-sqlserver,1433;Database=InventoryServiceDb;User Id=sa;Password=YourStrongPassword123!;TrustServerCertificate=True;Encrypt=False
+    depends_on:
+      - inventory-sqlserver
+
+  inventory-sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: inventory-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: YourStrongPassword123!
+    ports:
+      - "1435:1433"
+    volumes:
+      - inventory_sqlserver_data:/var/opt/mssql
+
 volumes:
   sqlserver_data:
   mongodb_data:
+  inventory_sqlserver_data:
