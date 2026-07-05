@@ -24,5 +24,30 @@
     volumes:
       - sqlserver_data:/var/opt/mssql
 
+  product-catalog-service:
+    build:
+      context: ./src/ProductCatalogService
+      dockerfile: Dockerfile
+    container_name: product-catalog-service
+    ports:
+      - "8081:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      MongoDbSettings__ConnectionString: mongodb://mongodb:27017
+      MongoDbSettings__DatabaseName: ProductCatalogDb
+      MongoDbSettings__ProductsCollectionName: Products
+    depends_on:
+      - mongodb
+
+  mongodb:
+    image: mongo:7
+    container_name: product-catalog-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
 volumes:
   sqlserver_data:
+  mongodb_data:
