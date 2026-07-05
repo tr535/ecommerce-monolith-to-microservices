@@ -11,15 +11,18 @@ public class OrderProcessingService : IOrderService
     private readonly OrderDbContext _context;
     private readonly ProductCatalogClient _productCatalogClient;
     private readonly InventoryClient _inventoryClient;
+    private readonly NotificationClient _notificationClient;
 
     public OrderProcessingService(
         OrderDbContext context,
         ProductCatalogClient productCatalogClient,
-        InventoryClient inventoryClient)
+        InventoryClient inventoryClient,
+        NotificationClient notificationClient)
     {
         _context = context;
         _productCatalogClient = productCatalogClient;
         _inventoryClient = inventoryClient;
+        _notificationClient = notificationClient;
     }
 
     public async Task<List<OrderResponseDto>> GetAllAsync()
@@ -37,12 +40,7 @@ public class OrderProcessingService : IOrderService
             .Include(o => o.Items)
             .FirstOrDefaultAsync(o => o.Id == id);
 
-        if (order == null)
-        {
-            return null;
-        }
-
-        return MapToResponseDto(order);
+        return order == null ? null : MapToResponseDto(order);
     }
 
     public async Task<OrderResponseDto> CreateAsync(OrderCreateDto orderDto)
@@ -63,6 +61,8 @@ public class OrderProcessingService : IOrderService
             _context.Orders.Add(order);
             await _context.SaveChangesAsync();
 
+            await SendOrderNotificationAsync(order);
+
             return MapToResponseDto(order);
         }
 
@@ -80,6 +80,8 @@ public class OrderProcessingService : IOrderService
                 _context.Orders.Add(order);
                 await _context.SaveChangesAsync();
 
+                await SendOrderNotificationAsync(order);
+
                 return MapToResponseDto(order);
             }
 
@@ -96,6 +98,8 @@ public class OrderProcessingService : IOrderService
 
                 _context.Orders.Add(order);
                 await _context.SaveChangesAsync();
+
+                await SendOrderNotificationAsync(order);
 
                 return MapToResponseDto(order);
             }
@@ -118,7 +122,31 @@ public class OrderProcessingService : IOrderService
         _context.Orders.Add(order);
         await _context.SaveChangesAsync();
 
+        await SendOrderNotificationAsync(order);
+
         return MapToResponseDto(order);
+    }
+
+    private async Task SendOrderNotificationAsync(Order order)
+    {
+        try
+        {
+            var message = order.Status == OrderStatus.Confirmed
+                ? "Order confirmed successfully."
+                : "Order was rejected.";
+
+            await _notificationClient.SendNotificationAsync(new CreateNotificationRequestDto
+            {
+                OrderId = order.Id,
+                CustomerEmail = order.CustomerEmail,
+                Status = order.Status.ToString(),
+                Message = message
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to send notification for order {order.Id}: {ex.Message}");
+        }
     }
 
     private static OrderResponseDto MapToResponseDto(Order order)

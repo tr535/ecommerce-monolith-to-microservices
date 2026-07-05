@@ -86,10 +86,12 @@
       ConnectionStrings__DefaultConnection: Server=order-sqlserver,1433;Database=OrderServiceDb;User Id=sa;Password=YourStrongPassword123!;TrustServerCertificate=True;Encrypt=False
       ServiceUrls__ProductCatalogService: http://product-catalog-service:8080
       ServiceUrls__InventoryService: http://inventory-service:8080
+      ServiceUrls__NotificationService: http://notification-service:8080
     depends_on:
       - order-sqlserver
       - product-catalog-service
       - inventory-service
+      - notification-service
 
   order-sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -102,8 +104,34 @@
     volumes:
       - order_sqlserver_data:/var/opt/mssql
 
+  notification-service:
+    build:
+      context: ./src/NotificationService
+      dockerfile: Dockerfile
+    container_name: notification-service
+    ports:
+      - "8084:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: Server=notification-sqlserver,1433;Database=NotificationServiceDb;User Id=sa;Password=YourStrongPassword123!;TrustServerCertificate=True;Encrypt=False
+    depends_on:
+      - notification-sqlserver
+
+  notification-sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: notification-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: YourStrongPassword123!
+    ports:
+      - "1437:1433"
+    volumes:
+      - notification_sqlserver_data:/var/opt/mssql
+
 volumes:
   sqlserver_data:
   mongodb_data:
   inventory_sqlserver_data:
   order_sqlserver_data:
+  notification_sqlserver_data:
