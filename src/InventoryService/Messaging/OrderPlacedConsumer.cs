@@ -1,6 +1,7 @@
 ﻿using System.Text;
 using System.Text.Json;
 using InventoryService.DAL;
+using InventoryService.Models;
 using MessagingContracts;
 using Microsoft.EntityFrameworkCore;
 using RabbitMQ.Client;
@@ -69,7 +70,6 @@ public class OrderPlacedConsumer : BackgroundService
             try
             {
                 var json = Encoding.UTF8.GetString(eventArgs.Body.ToArray());
-
                 var message = JsonSerializer.Deserialize<OrderPlacedMessage>(json);
 
                 if (message == null)
@@ -173,11 +173,59 @@ public class OrderPlacedConsumer : BackgroundService
         var dbContext = scope.ServiceProvider.GetRequiredService<InventoryDbContext>();
         var publisher = scope.ServiceProvider.GetRequiredService<IRabbitMqPublisher>();
 
+        var existingReservation = await dbContext.InventoryReservations
+            .FirstOrDefaultAsync(r => r.OrderId == message.OrderId, cancellationToken);
+
+        if (existingReservation != null)
+        {
+            _logger.LogInformation(
+                "OrderId {OrderId} was already processed by InventoryService with status {Status}. Re-publishing previous result. CorrelationId {CorrelationId}",
+                message.OrderId,
+                existingReservation.Status,
+                correlationId);
+
+            if (existingReservation.Status == "Reserved")
+            {
+                var reservedMessage = new InventoryReservedMessage
+                {
+                    OrderId = message.OrderId,
+                    CustomerEmail = existingReservation.CustomerEmail,
+                    CorrelationId = existingReservation.CorrelationId,
+                    Message = "Inventory was already reserved for this order."
+                };
+
+                await publisher.PublishAsync(
+                    reservedMessage,
+                    RabbitMqNames.InventoryReservedRoutingKey,
+                    existingReservation.CorrelationId,
+                    cancellationToken);
+            }
+            else
+            {
+                var rejectedMessage = new InventoryRejectedMessage
+                {
+                    OrderId = message.OrderId,
+                    CustomerEmail = existingReservation.CustomerEmail,
+                    CorrelationId = existingReservation.CorrelationId,
+                    Reason = existingReservation.Reason ?? "Inventory was already rejected for this order."
+                };
+
+                await publisher.PublishAsync(
+                    rejectedMessage,
+                    RabbitMqNames.InventoryRejectedRoutingKey,
+                    existingReservation.CorrelationId,
+                    cancellationToken);
+            }
+
+            return;
+        }
+
         foreach (var item in message.Items)
         {
             if (item.Quantity <= 0)
             {
-                await PublishRejectedAsync(
+                await SaveRejectedReservationAndPublishAsync(
+                    dbContext,
                     publisher,
                     message,
                     correlationId,
@@ -192,7 +240,8 @@ public class OrderPlacedConsumer : BackgroundService
 
             if (inventoryItem == null)
             {
-                await PublishRejectedAsync(
+                await SaveRejectedReservationAndPublishAsync(
+                    dbContext,
                     publisher,
                     message,
                     correlationId,
@@ -204,7 +253,8 @@ public class OrderPlacedConsumer : BackgroundService
 
             if (inventoryItem.QuantityAvailable < item.Quantity)
             {
-                await PublishRejectedAsync(
+                await SaveRejectedReservationAndPublishAsync(
+                    dbContext,
                     publisher,
                     message,
                     correlationId,
@@ -224,9 +274,21 @@ public class OrderPlacedConsumer : BackgroundService
             inventoryItem.QuantityReserved += item.Quantity;
         }
 
+        var reservation = new InventoryReservation
+        {
+            OrderId = message.OrderId,
+            CustomerEmail = message.CustomerEmail,
+            CorrelationId = correlationId,
+            Status = "Reserved",
+            Reason = null,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        dbContext.InventoryReservations.Add(reservation);
+
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        var reservedMessage = new InventoryReservedMessage
+        var reservedMessageToPublish = new InventoryReservedMessage
         {
             OrderId = message.OrderId,
             CustomerEmail = message.CustomerEmail,
@@ -235,7 +297,7 @@ public class OrderPlacedConsumer : BackgroundService
         };
 
         await publisher.PublishAsync(
-            reservedMessage,
+            reservedMessageToPublish,
             RabbitMqNames.InventoryReservedRoutingKey,
             correlationId,
             cancellationToken);
@@ -246,13 +308,28 @@ public class OrderPlacedConsumer : BackgroundService
             correlationId);
     }
 
-    private async Task PublishRejectedAsync(
+    private async Task SaveRejectedReservationAndPublishAsync(
+        InventoryDbContext dbContext,
         IRabbitMqPublisher publisher,
         OrderPlacedMessage message,
         string correlationId,
         string reason,
         CancellationToken cancellationToken)
     {
+        var reservation = new InventoryReservation
+        {
+            OrderId = message.OrderId,
+            CustomerEmail = message.CustomerEmail,
+            CorrelationId = correlationId,
+            Status = "Rejected",
+            Reason = reason,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        dbContext.InventoryReservations.Add(reservation);
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+
         var rejectedMessage = new InventoryRejectedMessage
         {
             OrderId = message.OrderId,

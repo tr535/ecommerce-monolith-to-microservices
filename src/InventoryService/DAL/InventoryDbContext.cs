@@ -11,4 +11,15 @@ public class InventoryDbContext : DbContext
     }
 
     public DbSet<InventoryItem> InventoryItems { get; set; }
+
+    public DbSet<InventoryReservation> InventoryReservations { get; set; }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<InventoryReservation>()
+            .HasIndex(r => r.OrderId)
+            .IsUnique();
+    }
 }
