@@ -1,7 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using MessagingContracts;
 using OrderService.Clients;
 using OrderService.DAL;
 using OrderService.DTOs;
+using OrderService.Messaging;
 using OrderService.Models;
 
 namespace OrderService.Services;
@@ -10,19 +12,16 @@ public class OrderProcessingService : IOrderService
 {
     private readonly OrderDbContext _context;
     private readonly ProductCatalogClient _productCatalogClient;
-    private readonly InventoryClient _inventoryClient;
-    private readonly NotificationClient _notificationClient;
+    private readonly IRabbitMqPublisher _rabbitMqPublisher;
 
     public OrderProcessingService(
         OrderDbContext context,
         ProductCatalogClient productCatalogClient,
-        InventoryClient inventoryClient,
-        NotificationClient notificationClient)
+        IRabbitMqPublisher rabbitMqPublisher)
     {
         _context = context;
         _productCatalogClient = productCatalogClient;
-        _inventoryClient = inventoryClient;
-        _notificationClient = notificationClient;
+        _rabbitMqPublisher = rabbitMqPublisher;
     }
 
     public async Task<List<OrderResponseDto>> GetAllAsync()
@@ -45,63 +44,47 @@ public class OrderProcessingService : IOrderService
 
     public async Task<OrderResponseDto> CreateAsync(OrderCreateDto orderDto)
     {
+        var correlationId = Guid.NewGuid().ToString();
+
         var order = new Order
         {
             CustomerEmail = orderDto.CustomerEmail,
             CreatedAt = DateTime.UtcNow,
             Status = OrderStatus.Pending,
+            TotalAmount = 0,
             Items = new List<OrderItem>()
         };
 
         if (orderDto.Items == null || !orderDto.Items.Any())
         {
-            order.Status = OrderStatus.Rejected;
-            order.TotalAmount = 0;
-
-            _context.Orders.Add(order);
-            await _context.SaveChangesAsync();
-
-            await SendOrderNotificationAsync(order);
-
-            return MapToResponseDto(order);
+            return await SaveRejectedOrderAsync(
+                order,
+                correlationId,
+                "Order must contain at least one item.");
         }
 
         decimal totalAmount = 0;
 
+        var orderPlacedItems = new List<OrderPlacedItemMessage>();
+
         foreach (var itemDto in orderDto.Items)
         {
-            var product = await _productCatalogClient.GetProductByIdAsync(itemDto.ProductId);
-
-            if (product == null || itemDto.Quantity <= 0)
+            if (itemDto.Quantity <= 0)
             {
-                order.Status = OrderStatus.Rejected;
-                order.TotalAmount = 0;
-
-                _context.Orders.Add(order);
-                await _context.SaveChangesAsync();
-
-                await SendOrderNotificationAsync(order);
-
-                return MapToResponseDto(order);
+                return await SaveRejectedOrderAsync(
+                    order,
+                    correlationId,
+                    $"Invalid quantity for product {itemDto.ProductId}.");
             }
 
-            var reserveResult = await _inventoryClient.ReserveAsync(new ReserveInventoryRequestDto
+            var product = await _productCatalogClient.GetProductByIdAsync(itemDto.ProductId);
+
+            if (product == null)
             {
-                ProductId = itemDto.ProductId,
-                Quantity = itemDto.Quantity
-            });
-
-            if (reserveResult == null || !reserveResult.Success)
-            {
-                order.Status = OrderStatus.Rejected;
-                order.TotalAmount = 0;
-
-                _context.Orders.Add(order);
-                await _context.SaveChangesAsync();
-
-                await SendOrderNotificationAsync(order);
-
-                return MapToResponseDto(order);
+                return await SaveRejectedOrderAsync(
+                    order,
+                    correlationId,
+                    $"Product {itemDto.ProductId} was not found.");
             }
 
             var orderItem = new OrderItem
@@ -113,40 +96,63 @@ public class OrderProcessingService : IOrderService
             };
 
             order.Items.Add(orderItem);
+
+            orderPlacedItems.Add(new OrderPlacedItemMessage
+            {
+                ProductId = product.Id,
+                Quantity = itemDto.Quantity
+            });
+
             totalAmount += product.Price * itemDto.Quantity;
         }
 
-        order.Status = OrderStatus.Confirmed;
+        order.Status = OrderStatus.Pending;
         order.TotalAmount = totalAmount;
 
         _context.Orders.Add(order);
         await _context.SaveChangesAsync();
 
-        await SendOrderNotificationAsync(order);
+        var orderPlacedMessage = new OrderPlacedMessage
+        {
+            OrderId = order.Id,
+            CustomerEmail = order.CustomerEmail,
+            CorrelationId = correlationId,
+            Items = orderPlacedItems
+        };
+
+        await _rabbitMqPublisher.PublishAsync(
+            orderPlacedMessage,
+            RabbitMqNames.OrderPlacedRoutingKey,
+            correlationId);
 
         return MapToResponseDto(order);
     }
 
-    private async Task SendOrderNotificationAsync(Order order)
+    private async Task<OrderResponseDto> SaveRejectedOrderAsync(
+        Order order,
+        string correlationId,
+        string reason)
     {
-        try
-        {
-            var message = order.Status == OrderStatus.Confirmed
-                ? "Order confirmed successfully."
-                : "Order was rejected.";
+        order.Status = OrderStatus.Rejected;
+        order.TotalAmount = 0;
 
-            await _notificationClient.SendNotificationAsync(new CreateNotificationRequestDto
-            {
-                OrderId = order.Id,
-                CustomerEmail = order.CustomerEmail,
-                Status = order.Status.ToString(),
-                Message = message
-            });
-        }
-        catch (Exception ex)
+        _context.Orders.Add(order);
+        await _context.SaveChangesAsync();
+
+        var orderRejectedMessage = new OrderRejectedMessage
         {
-            Console.WriteLine($"Failed to send notification for order {order.Id}: {ex.Message}");
-        }
+            OrderId = order.Id,
+            CustomerEmail = order.CustomerEmail,
+            CorrelationId = correlationId,
+            Reason = reason
+        };
+
+        await _rabbitMqPublisher.PublishAsync(
+            orderRejectedMessage,
+            RabbitMqNames.OrderRejectedRoutingKey,
+            correlationId);
+
+        return MapToResponseDto(order);
     }
 
     private static OrderResponseDto MapToResponseDto(Order order)

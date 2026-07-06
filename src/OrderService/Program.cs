@@ -30,6 +30,7 @@ builder.Services.AddHttpClient<NotificationClient>(client =>
 builder.Services.AddScoped<IOrderService, OrderProcessingService>();
 
 builder.Services.AddSingleton<IRabbitMqPublisher, RabbitMqPublisher>();
+builder.Services.AddHostedService<InventoryResultConsumer>();
 
 builder.Services.AddControllers();
 

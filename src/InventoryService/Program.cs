@@ -1,4 +1,5 @@
 using InventoryService.DAL;
+using InventoryService.Messaging;
 using InventoryService.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,6 +9,9 @@ builder.Services.AddDbContext<InventoryDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 builder.Services.AddScoped<IInventoryService, InventoryService.Services.InventoryService>();
+
+builder.Services.AddSingleton<IRabbitMqPublisher, RabbitMqPublisher>();
+builder.Services.AddHostedService<OrderPlacedConsumer>();
 
 builder.Services.AddControllers();
 
