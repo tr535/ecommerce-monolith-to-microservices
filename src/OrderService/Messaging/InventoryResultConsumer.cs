@@ -28,19 +28,15 @@ public class InventoryResultConsumer : BackgroundService
         _logger = logger;
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var factory = new ConnectionFactory
-        {
-            HostName = _configuration["RabbitMq:HostName"] ?? "localhost",
-            Port = int.Parse(_configuration["RabbitMq:Port"] ?? "5672"),
-            UserName = _configuration["RabbitMq:UserName"] ?? "guest",
-            Password = _configuration["RabbitMq:Password"] ?? "guest",
-            DispatchConsumersAsync = true
-        };
+        await ConnectToRabbitMqWithRetryAsync(stoppingToken);
 
-        _connection = factory.CreateConnection();
-        _channel = _connection.CreateModel();
+        if (_channel == null)
+        {
+            _logger.LogError("RabbitMQ channel was not created. OrderService inventory result consumer will not start.");
+            return;
+        }
 
         _channel.ExchangeDeclare(
             exchange: RabbitMqNames.ExchangeName,
@@ -73,7 +69,47 @@ public class InventoryResultConsumer : BackgroundService
 
         _logger.LogInformation("OrderService InventoryResultConsumer started.");
 
-        return Task.CompletedTask;
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("OrderService InventoryResultConsumer is stopping.");
+        }
+    }
+
+    private async Task ConnectToRabbitMqWithRetryAsync(CancellationToken stoppingToken)
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = _configuration["RabbitMq:HostName"] ?? "localhost",
+            Port = int.Parse(_configuration["RabbitMq:Port"] ?? "5672"),
+            UserName = _configuration["RabbitMq:UserName"] ?? "guest",
+            Password = _configuration["RabbitMq:Password"] ?? "guest",
+            DispatchConsumersAsync = true
+        };
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                _connection = factory.CreateConnection();
+                _channel = _connection.CreateModel();
+
+                _logger.LogInformation("OrderService connected to RabbitMQ.");
+
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "RabbitMQ is not ready yet. OrderService will retry in 5 seconds.");
+
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            }
+        }
     }
 
     private void DeclareAndBindQueue(string queueName, string routingKey)
@@ -120,10 +156,13 @@ public class InventoryResultConsumer : BackgroundService
                     queueName,
                     correlationId);
 
-                _channel!.BasicNack(
-                    deliveryTag: eventArgs.DeliveryTag,
-                    multiple: false,
-                    requeue: true);
+                if (_channel?.IsOpen == true)
+                {
+                    _channel.BasicNack(
+                        deliveryTag: eventArgs.DeliveryTag,
+                        multiple: false,
+                        requeue: true);
+                }
             }
         };
 
@@ -274,8 +313,15 @@ public class InventoryResultConsumer : BackgroundService
 
     public override void Dispose()
     {
-        _channel?.Close();
-        _connection?.Close();
+        try
+        {
+            _channel?.Close();
+            _connection?.Close();
+        }
+        catch
+        {
+            // Ignore dispose errors during shutdown.
+        }
 
         _channel?.Dispose();
         _connection?.Dispose();

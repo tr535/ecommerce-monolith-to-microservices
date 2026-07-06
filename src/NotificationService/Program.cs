@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using NotificationService.DAL;
+using NotificationService.Messaging;
 using NotificationService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -8,6 +9,8 @@ builder.Services.AddDbContext<NotificationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 builder.Services.AddScoped<INotificationService, NotificationProcessingService>();
+
+builder.Services.AddHostedService<OrderFinalStateConsumer>();
 
 builder.Services.AddControllers();
 

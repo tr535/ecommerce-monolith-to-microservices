@@ -1,11 +1,15 @@
 ﻿FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-COPY ["OrderService.csproj", "./"]
-RUN dotnet restore "OrderService.csproj"
+COPY src/MessagingContracts/MessagingContracts.csproj src/MessagingContracts/
+COPY src/OrderService/OrderService.csproj src/OrderService/
 
-COPY . .
-RUN dotnet publish "OrderService.csproj" -c Release -o /app/publish /p:UseAppHost=false
+RUN dotnet restore src/OrderService/OrderService.csproj
+
+COPY src/MessagingContracts/ src/MessagingContracts/
+COPY src/OrderService/ src/OrderService/
+
+RUN dotnet publish src/OrderService/OrderService.csproj -c Release -o /app/publish /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
