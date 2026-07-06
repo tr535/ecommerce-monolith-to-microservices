@@ -15,6 +15,12 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["X-Service-Instance"] = Environment.MachineName;
+    await next();
+});
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();

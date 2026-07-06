@@ -40,6 +40,22 @@
     depends_on:
       - mongodb
 
+  product-catalog-service-replica:
+    build:
+      context: ./src/ProductCatalogService
+      dockerfile: Dockerfile
+    container_name: product-catalog-service-replica
+    ports:
+      - "8086:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      MongoDbSettings__ConnectionString: mongodb://mongodb:27017
+      MongoDbSettings__DatabaseName: ProductCatalogDb
+      MongoDbSettings__ProductsCollectionName: Products
+    depends_on:
+      - mongodb
+
   mongodb:
     image: mongo:7
     container_name: product-catalog-mongodb
@@ -128,6 +144,42 @@
       - "1437:1433"
     volumes:
       - notification_sqlserver_data:/var/opt/mssql
+
+  bff-service:
+    build:
+      context: ./src/BffService
+      dockerfile: Dockerfile
+    container_name: bff-service
+    ports:
+      - "8085:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ServiceUrls__OrderService: http://order-service:8080
+      ServiceUrls__ProductCatalogService: http://product-catalog-service:8080
+      ServiceUrls__NotificationService: http://notification-service:8080
+    depends_on:
+      - order-service
+      - product-catalog-service
+      - notification-service
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: src/ApiGateway/Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8000:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+    depends_on:
+      - product-catalog-service
+      - product-catalog-service-replica
+      - inventory-service
+      - order-service
+      - notification-service
+      - bff-service
 
 volumes:
   sqlserver_data:
