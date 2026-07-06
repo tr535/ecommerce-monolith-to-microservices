@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using OrderService.Clients;
 using OrderService.DAL;
+using OrderService.Messaging;
 using OrderService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -27,6 +28,8 @@ builder.Services.AddHttpClient<NotificationClient>(client =>
 });
 
 builder.Services.AddScoped<IOrderService, OrderProcessingService>();
+
+builder.Services.AddSingleton<IRabbitMqPublisher, RabbitMqPublisher>();
 
 builder.Services.AddControllers();
 

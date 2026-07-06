@@ -145,6 +145,18 @@
     volumes:
       - notification_sqlserver_data:/var/opt/mssql
 
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: ecommerce-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
   bff-service:
     build:
       context: ./src/BffService
@@ -187,3 +199,4 @@ volumes:
   inventory_sqlserver_data:
   order_sqlserver_data:
   notification_sqlserver_data:
+  rabbitmq_data:
