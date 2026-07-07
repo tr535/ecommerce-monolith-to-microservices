@@ -41,6 +41,12 @@
     depends_on:
       - mongodb
       - redis
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   product-catalog-service-replica:
     build:
@@ -59,6 +65,12 @@
     depends_on:
       - mongodb
       - redis
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   mongodb:
     image: mongo:7
@@ -67,6 +79,12 @@
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --eval \"db.adminCommand('ping')\" --quiet || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   redis:
     image: redis:7
@@ -75,6 +93,12 @@
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
 
   inventory-service:
     build:
@@ -94,6 +118,12 @@
     depends_on:
       - inventory-sqlserver
       - rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
 
   inventory-sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -130,6 +160,12 @@
       - inventory-service
       - notification-service
       - rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
 
   order-sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -160,6 +196,12 @@
     depends_on:
       - notification-sqlserver
       - rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
 
   notification-sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -183,6 +225,12 @@
       RABBITMQ_DEFAULT_PASS: guest
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   bff-service:
     build:
@@ -201,6 +249,12 @@
       - order-service
       - product-catalog-service
       - notification-service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   api-gateway:
     build:
@@ -219,6 +273,12 @@
       - order-service
       - notification-service
       - bff-service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 volumes:
   sqlserver_data:
