@@ -1,10 +1,20 @@
 using ProductCatalogService.Models;
 using ProductCatalogService.Services;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<MongoDbSettings>(
     builder.Configuration.GetSection("MongoDbSettings"));
+
+var redisConnectionString =
+    builder.Configuration["Redis:ConnectionString"] ?? "localhost:6379";
+
+var redisOptions = ConfigurationOptions.Parse(redisConnectionString);
+redisOptions.AbortOnConnectFail = false;
+
+builder.Services.AddSingleton<IConnectionMultiplexer>(
+    _ => ConnectionMultiplexer.Connect(redisOptions));
 
 builder.Services.AddScoped<IProductService, ProductService>();
 
