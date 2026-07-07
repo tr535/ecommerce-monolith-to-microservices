@@ -6,12 +6,16 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHttpClient();
 
+builder.Services.AddHealthChecks();
+
 var app = builder.Build();
 
 app.UseSwagger();
 app.UseSwaggerUI();
 
 app.MapGet("/", () => "BFF Service is running");
+
+app.MapHealthChecks("/health");
 
 app.MapGet("/api/bff/orders/{orderId:int}/details", async (
     int orderId,
