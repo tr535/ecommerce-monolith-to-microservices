@@ -1,818 +1,463 @@
 # Ecommerce Monolith to Microservices
 
-Backend architecture project built with .NET 8 Web API, SQL Server, Entity Framework Core, MongoDB, YARP, Swagger, Docker, and Docker Compose.
+Backend architecture project built with **.NET 8 Web API**, **SQL Server**, **Entity Framework Core**, **MongoDB**, **YARP**, **RabbitMQ**, **Redis**, **Swagger**, **Docker**, and **Docker Compose**.
 
 The project starts as a simple monolithic e-commerce API and evolves step by step into a production-style microservices architecture.
+
+## System Architecture (Current State)
+
+```mermaid
+flowchart TB
+    Client["Client / Swagger"]
+
+    subgraph Edge["Entry Layer"]
+        GW["API Gateway (YARP) :8000"]
+        BFF["BFF Service :8085"]
+    end
+
+    subgraph Services["Microservices"]
+        PC1["ProductCatalogService :8081"]
+        PC2["ProductCatalogService Replica :8086"]
+        INV["InventoryService :8082"]
+        ORD["OrderService :8083"]
+        NOT["NotificationService :8084"]
+    end
+
+    subgraph Data["Data & Infra"]
+        MONGO[("MongoDB")]
+        SQLI[("SQL Server - Inventory")]
+        SQLO[("SQL Server - Orders")]
+        SQLN[("SQL Server - Notifications")]
+        REDIS[("Redis Cache")]
+        MQ{{"RabbitMQ - Choreography Saga"}}
+    end
+
+    Client --> GW
+    GW --> PC1
+    GW --> PC2
+    GW --> INV
+    GW --> ORD
+    GW --> NOT
+    GW --> BFF
+
+    BFF --> ORD
+    BFF --> PC1
+    BFF --> NOT
+
+    PC1 <--> REDIS
+    PC2 <--> REDIS
+    PC1 --> MONGO
+    PC2 --> MONGO
+
+    INV --> SQLI
+    ORD --> SQLO
+    NOT --> SQLN
+
+    ORD -. publishes/consumes .- MQ
+    INV -. publishes/consumes .- MQ
+    NOT -. consumes .- MQ
+```
+
+Two ProductCatalogService replicas share the same MongoDB database and the same Redis cache; the Gateway load-balances between them with RoundRobin. Order processing between OrderService, InventoryService, and NotificationService happens asynchronously through RabbitMQ (see the saga diagram in Phase 4).
 
 ## Project Goal
 
 The goal of this project is to take a working monolithic API and gradually evolve it into a distributed system that demonstrates:
 
-* Containers
-* Microservices
-* Database-per-service
-* Polyglot persistence
-* API Gateway
-* BFF
-* Load balancing
-* Async messaging
-* Saga pattern
-* Distributed caching
-* Monitoring and observability
+- Containers
+- Microservices
+- Database-per-service
+- Polyglot persistence
+- API Gateway
+- BFF
+- Load balancing
+- Async messaging
+- Choreography Saga pattern
+- Distributed caching (Redis, cache-aside)
+- Idempotent message consumers
+- Health checks
+- Monitoring and observability (in progress)
 
 ## Current Phase
 
-Phase 3 � API Gateway, BFF and Load Balancing
+**Phase 5 — Health Checks & Observability (partial)**
 
-Phase 1 created a working monolithic e-commerce API.
-
-Phase 2 split the monolith into independent microservices with database-per-service and polyglot persistence.
-
-Phase 3 adds an API Gateway, a BFF service, and load balancing for service replicas.
+- Phase 1 — Monolith baseline ✅
+- Phase 2 — Microservices split, database-per-service ✅
+- Phase 3 — API Gateway, BFF, load balancing ✅
+- Phase 4 — Async messaging, Choreography Saga, idempotency, Redis cache ✅
+- Phase 5 — Health endpoints + Docker Compose healthchecks ✅
+- Phase 5 — Structured logging (Serilog + Seq) and full Correlation ID trace — **planned, not yet implemented**
 
 ## Branches
 
-```text
-master
-```
-
-Contains the stable Phase 1 monolith.
-
-```text
-phase-2-microservices
-```
-
-Contains Phase 1, Phase 2 microservices, and Phase 3 Gateway/BFF/Load Balancing implementation.
+- `master` — stable Phase 1 monolith
+- `phase-2-microservices` — Phase 1 + Phase 2 + Phase 3
+- `phase-4-async-saga` — adds Phase 4 (messaging, saga, Redis, idempotency)
+- `phase-5-observability` — adds Phase 5 (health checks, docker healthchecks)
 
 ---
 
-# Phase 1 � Monolith Baseline
+## Phase 1 — Monolith Baseline
 
-In Phase 1, the system was implemented as a single .NET 8 Web API backed by one SQL Server database.
+A single .NET 8 Web API backed by one SQL Server database.
 
-## Phase 1 Features Implemented
+**Features**
+- Product management
+- Inventory tracking
+- Order creation and validation
+- Confirmed orders when stock is available, Rejected when not
+- Inventory decreases only on confirmed orders
+- EF Core migrations
+- Swagger documentation
+- Dockerfile + Docker Compose (API + SQL Server)
 
-* Product management
-* Inventory tracking
-* Order creation
-* Inventory validation
-* Confirmed orders when stock is available
-* Rejected orders when stock is insufficient
-* Inventory decrease after successful orders
-* Inventory remains unchanged after rejected orders
-* Entity Framework Core migrations
-* Swagger API documentation
-* Dockerfile for the API
-* Docker Compose setup with API and SQL Server
+**Architecture**
 
-## Phase 1 Architecture
-
-```text
+```
 Client / Swagger
       |
       v
 .NET 8 Web API Monolith
       |
       +--> ProductsController
-      |
       +--> OrdersController
       |
       v
-Business Logic Layer
-      |
-      +--> ProductService
-      |
-      +--> OrderService
+Business Logic Layer (ProductService, OrderService)
       |
       v
-Entity Framework Core DbContext
-      |
-      v
-SQL Server Database
-      |
-      +--> Products
-      +--> InventoryItems
-      +--> Orders
-      +--> OrderItems
+EF Core DbContext --> SQL Server
 ```
 
-## Phase 1 Main Endpoints
+**Endpoints**
 
-### Products
-
-```http
-GET /api/Products
-GET /api/Products/{id}
+```
+GET  /api/Products
+GET  /api/Products/{id}
 POST /api/Products
-```
 
-### Orders
-
-```http
-GET /api/Orders
-GET /api/Orders/{id}
+GET  /api/Orders
+GET  /api/Orders/{id}
 POST /api/Orders
 ```
 
----
-
-# Phase 2 � Microservices Split
-
-In Phase 2, the monolith was split into four independent services:
-
-* ProductCatalogService
-* InventoryService
-* OrderService
-* NotificationService
-
-Each service owns its own data and exposes its own API.
-
-The services communicate with each other using synchronous HTTP calls for now.
-Async messaging and saga orchestration will be added in Phase 4.
-
-## Phase 2 Architecture
-
-```text
-Client / Swagger
-      |
-      v
-OrderService
-      |
-      +--> ProductCatalogService
-      |
-      +--> InventoryService
-      |
-      +--> NotificationService
-```
-
-Each service has its own database:
-
-```text
-ProductCatalogService  --> MongoDB
-InventoryService       --> SQL Server
-OrderService           --> SQL Server
-NotificationService    --> SQL Server
-```
-
-## Phase 2 Services
-
-## ProductCatalogService
-
-ProductCatalogService is responsible for product catalog data.
-
-It uses MongoDB because products can have flexible attributes that differ between categories.
-
-For example, electronics, clothing, and books may all require different product fields.
-
-### Database
-
-```text
-Database: ProductCatalogDb
-Collection: Products
-Technology: MongoDB
-```
-
-### Product Model
-
-```text
-Id: string ObjectId
-Name: string
-Description: string
-Price: decimal
-Category: string
-Attributes: Dictionary<string, string>
-```
-
-### Endpoints
-
-```http
-GET /api/Products
-GET /api/Products/{id}
-POST /api/Products
-```
-
-### Example Product Request
-
-```json
-{
-  "name": "Laptop",
-  "description": "Business laptop",
-  "price": 3500,
-  "category": "Electronics",
-  "attributes": {
-    "brand": "Dell",
-    "ram": "16GB",
-    "storage": "512GB SSD"
-  }
-}
-```
+Run at: `http://localhost:8080` · Swagger: `http://localhost:8080/swagger`
 
 ---
 
-## InventoryService
+## Phase 2 — Microservices Split
 
-InventoryService is responsible for product stock.
+The monolith was split into independent services, each owning its own database (polyglot persistence):
 
-It uses SQL Server because inventory operations require strong consistency.
-The system must prevent invalid stock updates and avoid reserving more items than are available.
+| Service | Database | Port |
+|---|---|---|
+| ProductCatalogService | MongoDB | 8081 (+ replica 8086) |
+| InventoryService | SQL Server | 8082 |
+| OrderService | SQL Server | 8083 |
+| NotificationService | SQL Server | 8084 |
 
-### Database
+**Architecture Decisions**
 
-```text
-Database: InventoryServiceDb
-Technology: SQL Server
-```
+- **ProductCatalogService → MongoDB**: product attributes vary by category, so a flexible document model fits better than rigid relational tables.
+- **InventoryService → SQL Server**: stock reservation requires strong consistency and ACID guarantees to avoid over-reserving.
+- **OrderService → SQL Server**: orders contain financial data and a naturally relational Order → OrderItem structure.
+- **NotificationService → SQL Server**: simple structured notification records.
 
-### Entity
-
-```text
-InventoryItem
-- Id
-- ProductId
-- QuantityAvailable
-- QuantityReserved
-```
-
-### Endpoints
-
-```http
-GET /api/Inventory
-GET /api/Inventory/{productId}
-POST /api/Inventory
-POST /api/Inventory/reserve
-```
-
-### Business Logic
-
-When inventory is reserved:
-
-* `QuantityAvailable` decreases
-* `QuantityReserved` increases
-
-If the requested quantity is invalid or not enough stock is available, the service returns `success: false`.
+In Phase 2 the services still communicated **synchronously over HTTP**; this was replaced by async messaging in Phase 4.
 
 ---
 
-## OrderService
+## Phase 3 — API Gateway, BFF & Load Balancing
 
-OrderService is responsible for creating and storing orders.
+**API Gateway (YARP)** — single entry point on port `8000`, routing to internal services:
 
-It uses SQL Server because orders contain financial and transactional data.
-Orders also have a clear relational structure between `Order` and `OrderItem`.
-
-### Database
-
-```text
-Database: OrderServiceDb
-Technology: SQL Server
+```
+/api/products/**       -> ProductCatalogService
+/api/inventory/**      -> InventoryService
+/api/orders/**         -> OrderService
+/api/notifications/**  -> NotificationService
+/api/bff/**            -> BffService
 ```
 
-### Entities
+**BFF Service** — aggregates data from multiple services into one response:
 
-```text
-Order
-- Id
-- CustomerEmail
-- CreatedAt
-- Status
-- TotalAmount
-- Items
-
-OrderItem
-- Id
-- OrderId
-- ProductId
-- ProductName
-- Quantity
-- UnitPrice
+```
+GET http://localhost:8000/api/bff/orders/{orderId}/details
 ```
 
-### Order Statuses
+Returns combined `order`, `products`, and `notifications` data in a single call.
 
-```text
-Pending
-Confirmed
-Rejected
-Cancelled
+**Load Balancing** — two running instances of ProductCatalogService:
+
+```
+product-catalog-service          -> localhost:8081
+product-catalog-service-replica  -> localhost:8086
 ```
 
-### Endpoints
+The Gateway distributes requests between them using YARP's `RoundRobin` policy. Each response includes an `X-Service-Instance` header identifying the container that handled the request, proving requests are load-balanced.
 
-```http
-GET /api/Orders
-GET /api/Orders/{id}
-POST /api/Orders
-```
+**Screenshots**
 
-### Service Clients
-
-OrderService communicates with:
-
-```text
-ProductCatalogClient   --> ProductCatalogService
-InventoryClient        --> InventoryService
-NotificationClient     --> NotificationService
-```
-
-### Order Flow
-
-When a new order is created:
-
-1. OrderService receives the order request.
-2. It calls ProductCatalogService to get product name and price.
-3. It calls InventoryService to reserve stock.
-4. If the product exists and inventory is available:
-
-   * The order is saved with status `Confirmed`
-   * The total amount is calculated
-   * Inventory is reserved
-   * A notification is sent to NotificationService
-5. If the product does not exist, quantity is invalid, or inventory is not available:
-
-   * The order is saved with status `Rejected`
-   * Total amount is set to `0`
-   * A rejected notification is sent to NotificationService
-
-### Example Order Request
-
-```json
-{
-  "customerEmail": "customer@test.com",
-  "items": [
-    {
-      "productId": "PRODUCT_ID_FROM_MONGODB",
-      "quantity": 2
-    }
-  ]
-}
-```
-
-### Example Confirmed Order Response
-
-```json
-{
-  "id": 1,
-  "customerEmail": "customer@test.com",
-  "status": "Confirmed",
-  "totalAmount": 7000,
-  "items": [
-    {
-      "productId": "PRODUCT_ID_FROM_MONGODB",
-      "productName": "Laptop",
-      "quantity": 2,
-      "unitPrice": 3500
-    }
-  ]
-}
-```
-
-### Example Rejected Order Response
-
-```json
-{
-  "id": 2,
-  "customerEmail": "customer@test.com",
-  "status": "Rejected",
-  "totalAmount": 0,
-  "items": []
-}
-```
+![API Gateway](docs/screenshots/phase-3/01-api-gateway-products.png)
+![BFF Order Details](docs/screenshots/phase-3/02-bff-order-details.png)
+![Load Balancing RoundRobin](docs/screenshots/phase-3/03-load-balancing-roundrobin.png)
 
 ---
 
-## NotificationService
+## Phase 4 — Async Messaging, Choreography Saga, Idempotency & Redis Cache
 
-NotificationService is responsible for storing customer notifications.
+### RabbitMQ & Choreography Saga
 
-In this demo project, no real email is sent.
-Instead, the notification is saved in the database to prove that the order flow reached the notification step.
+A `rabbitmq:3-management` container was added (UI at `http://localhost:15672`, guest/guest). The synchronous order flow was replaced by a **choreography-based saga**:
 
-### Database
-
-```text
-Database: NotificationServiceDb
-Technology: SQL Server
+```
+OrderService        --publishes--> OrderPlaced
+InventoryService    --consumes--> OrderPlaced
+                     --checks stock, publishes--> InventoryReserved | InventoryRejected
+OrderService         --consumes--> InventoryReserved | InventoryRejected
+                     --updates order, publishes--> OrderConfirmed | OrderRejected
+NotificationService  --consumes--> OrderConfirmed | OrderRejected
+                     --saves notification
 ```
 
-### Entity
+Contracts are centralized in a shared `MessagingContracts` project (exchange name, routing keys, queue names, message DTOs), so every service references the same message shapes.
 
-```text
-NotificationMessage
-- Id
-- OrderId
-- CustomerEmail
-- Status
-- Message
-- CreatedAt
+**Saga Flow — Happy Path**
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant O as OrderService
+    participant MQ as RabbitMQ
+    participant I as InventoryService
+    participant N as NotificationService
+
+    C->>O: POST /api/orders
+    O->>O: Save order as Pending
+    O->>MQ: publish OrderPlaced
+    MQ->>I: OrderPlaced
+    I->>I: Check stock, reserve if available
+    I->>MQ: publish InventoryReserved
+    MQ->>O: InventoryReserved
+    O->>O: Update order to Confirmed
+    O->>MQ: publish OrderConfirmed
+    MQ->>N: OrderConfirmed
+    N->>N: Save notification
 ```
 
-### Endpoints
+**Saga Flow — Rejected Path**
 
-```http
-GET /api/Notifications
-GET /api/Notifications/{id}
-POST /api/Notifications
+```mermaid
+sequenceDiagram
+    participant O as OrderService
+    participant MQ as RabbitMQ
+    participant I as InventoryService
+    participant N as NotificationService
+
+    O->>MQ: publish OrderPlaced
+    MQ->>I: OrderPlaced
+    I->>I: Not enough stock
+    I->>MQ: publish InventoryRejected
+    MQ->>O: InventoryRejected
+    O->>O: Update order to Rejected
+    O->>MQ: publish OrderRejected
+    MQ->>N: OrderRejected
+    N->>N: Save rejection notification
 ```
 
-### Example Notification Response
+Because RabbitMQ delivers **at-least-once**, `InventoryService` deduplicates using the `InventoryReservations` table (unique index on `OrderId`) before acting on `OrderPlaced` a second time.
 
-```json
-[
-  {
-    "id": 1,
-    "orderId": 1002,
-    "customerEmail": "customer@test.com",
-    "status": "Confirmed",
-    "message": "Order confirmed successfully.",
-    "createdAt": "2026-07-05T15:19:26.481135"
-  }
-]
-```
+### Idempotent Consumers
+
+RabbitMQ guarantees **at-least-once delivery** — the same message can be delivered more than once. To prevent double-reserving stock, `InventoryService` persists every processed order in an `InventoryReservations` table with a **unique index on `OrderId`**. Before reserving stock, the consumer checks whether the order was already handled; if so, it republishes the previous result instead of mutating inventory again.
+
+### Redis Cache (Cache-Aside Pattern)
+
+Redis was added to `ProductCatalogService`, shared by both instances (main + replica):
+
+- `GET /api/products` first checks Redis key `products:all`
+  - **Cache hit** → served from Redis
+  - **Cache miss** → loaded from MongoDB, then cached for 5 minutes
+- `GET /api/products/{id}` cached individually as `products:id:{id}`
+- Creating a new product invalidates `products:all`
+
+Because Redis is shared between the two ProductCatalogService replicas, a cache miss on one instance can result in a cache hit on the other — proving the cache is truly shared across load-balanced instances.
+
+**Screenshots**
+
+![RabbitMQ Queues](docs/screenshots/phase-4/02-rabbitmq-queues.png)
+![Order Created Pending](docs/screenshots/phase-4/03-order-created-pending.png)
+![Saga Happy Path Confirmed](docs/screenshots/phase-4/03-saga-happy-path-confirmed.png)
+![Notification Confirmed](docs/screenshots/phase-4/04-notification-confirmed.png)
+![Redis Container Running](docs/screenshots/phase-4/05-redis-container-running.png)
+![Redis Cache Hit and Miss - Shared Cache](docs/screenshots/phase-4/redis-cache-hit-and-miss-shared-cache.png)
 
 ---
 
-# Phase 3 � API Gateway, BFF and Load Balancing
+## Phase 5 — Health Checks & Observability
 
-Phase 3 adds an entry layer above the microservices.
+### Health Endpoints
 
-The goal of this phase is to make the client communicate through a single entry point, add a BFF endpoint that aggregates data from multiple services, and demonstrate load balancing between multiple instances of the same service.
-
-## Phase 3 Architecture
-
-```text
-Client
-  |
-  v
-API Gateway :8000
-  |
-  +--> ProductCatalogService instance 1
-  +--> ProductCatalogService instance 2
-  +--> InventoryService
-  +--> OrderService
-  +--> NotificationService
-  +--> BffService
-```
-
-## API Gateway
-
-An API Gateway was added using YARP.
-
-The gateway runs on port `8000` and routes requests to the internal microservices.
-
-Before the gateway, the client had to know the direct service ports:
-
-```text
-ProductCatalogService  -> http://localhost:8081
-InventoryService       -> http://localhost:8082
-OrderService           -> http://localhost:8083
-NotificationService    -> http://localhost:8084
-```
-
-After adding the gateway, the client can use one entry point:
-
-```text
-http://localhost:8000
-```
-
-Example routes:
-
-```text
-GET  /api/products       -> ProductCatalogService
-GET  /api/inventory      -> InventoryService
-GET  /api/orders         -> OrderService
-GET  /api/notifications  -> NotificationService
-GET  /api/bff/...        -> BffService
-```
-
-The routing rules are configured in:
-
-```text
-src/ApiGateway/appsettings.json
-```
-
-The gateway is also registered in the root `docker-compose.yml`:
-
-```text
-api-gateway -> http://localhost:8000
-```
-
-## BFF Service
-
-A BFF service was added for a web-client order details view.
-
-The BFF exposes a single endpoint:
-
-```http
-GET /api/bff/orders/{orderId}/details
-```
-
-This endpoint aggregates data from multiple services:
-
-```text
-BffService
-  |
-  +--> OrderService
-  +--> ProductCatalogService
-  +--> NotificationService
-```
-
-Instead of forcing the client to call several services separately, the BFF returns one combined response containing:
-
-```text
-order
-products
-notifications
-```
-
-This keeps the client simpler and hides internal microservice communication from the frontend.
-
-Example request through the API Gateway:
-
-```text
-http://localhost:8000/api/bff/orders/2002/details
-```
-
-## Load Balancing
-
-Load balancing was added for ProductCatalogService.
-
-Two running instances of ProductCatalogService are defined in `docker-compose.yml`:
-
-```text
-product-catalog-service
-product-catalog-service-replica
-```
-
-Both instances run the same ProductCatalogService code and connect to the same MongoDB database.
-
-The API Gateway uses YARP with a `RoundRobin` load balancing policy:
-
-```json
-"LoadBalancingPolicy": "RoundRobin"
-```
-
-RoundRobin means that requests are distributed between the available service instances in turn.
-
-Each ProductCatalogService response includes a custom header:
-
-```text
-X-Service-Instance
-```
-
-This header contains the container instance that handled the request.
-
-The header is added in `src/ProductCatalogService/Program.cs`:
+Every core service exposes a health endpoint:
 
 ```csharp
-app.Use(async (context, next) =>
-{
-    context.Response.Headers["X-Service-Instance"] = Environment.MachineName;
-    await next();
-});
+builder.Services.AddHealthChecks();
+// ...
+app.MapHealthChecks("/health");
 ```
 
-To prove load balancing, several requests were sent through the gateway:
+Implemented in: ProductCatalogService, InventoryService, OrderService, NotificationService, BffService, ApiGateway.
 
-```powershell
-1..10 | ForEach-Object {
-    $response = Invoke-WebRequest -Uri "http://localhost:8000/api/products" -Method Get -UseBasicParsing
-    "$_ -> " + $response.Headers["X-Service-Instance"]
-}
+```
+http://localhost:8000/health   -> API Gateway
+http://localhost:8081/health   -> ProductCatalogService
+http://localhost:8086/health   -> ProductCatalogService (replica)
+http://localhost:8082/health   -> InventoryService
+http://localhost:8083/health   -> OrderService
+http://localhost:8084/health   -> NotificationService
+http://localhost:8085/health   -> BffService
 ```
 
-The output showed two different instance values, proving that requests were distributed between the two ProductCatalogService containers.
+### Docker Compose Healthchecks
 
-## Phase 3 Demo Evidence
+Each core service has a Docker-level healthcheck:
 
-Screenshots are stored under:
-
-```text
-docs/screenshots/phase-3
+```yaml
+healthcheck:
+  test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
 ```
 
-Evidence includes:
+`curl` was added to each service's Dockerfile so the healthcheck command can run inside the container. `docker ps` shows `(healthy)` for all core containers once they pass their first check.
 
-```text
-01-api-gateway-products.png
-02-bff-order-details.png
-03-load-balancing-roundrobin.png
-```
+**Screenshots**
 
-## Phase 3 Checkpoint
+![Health Endpoints](docs/screenshots/phase-5/01-health-endpoints.png)
+![Docker Compose Healthchecks](docs/screenshots/phase-5/02-docker-compose-healthchecks.png)
 
-Phase 3 is complete because:
+### Planned — Structured Logging & Correlation ID (Not Yet Implemented)
 
-* The client can access services through `http://localhost:8000`
-* The API Gateway routes requests to internal microservices
-* The BFF returns combined order details from multiple services
-* ProductCatalogService runs with two instances
-* The gateway distributes requests between the two ProductCatalogService instances using RoundRobin load balancing
+The remaining Phase 5 goals are designed but not yet stably implemented:
+
+- **Structured logging** — Serilog in every service, aggregated to a central [Seq](http://localhost:5341) instance.
+- **Correlation ID** — an `X-Correlation-ID` header propagated through the Gateway, HTTP calls, and RabbitMQ messages, so a single order can be traced end-to-end across the saga in Seq.
+
+This work is intentionally left out of the current stable commit to avoid destabilizing a working system under time constraints.
 
 ---
 
-# Docker Compose Services
+## Docker Compose Services
 
-The root `docker-compose.yml` runs the monolith, all microservices, databases, the API Gateway, and the BFF service.
+**Application Services**
 
-## Application Services
-
-```text
-ecommerce-api                         -> http://localhost:8080
-product-catalog-service               -> http://localhost:8081
-product-catalog-service-replica        -> http://localhost:8086
-inventory-service                     -> http://localhost:8082
-order-service                         -> http://localhost:8083
-notification-service                  -> http://localhost:8084
-bff-service                           -> http://localhost:8085
-api-gateway                           -> http://localhost:8000
+```
+ecommerce-api                    -> http://localhost:8080
+product-catalog-service          -> http://localhost:8081
+product-catalog-service-replica  -> http://localhost:8086
+inventory-service                -> http://localhost:8082
+order-service                    -> http://localhost:8083
+notification-service             -> http://localhost:8084
+bff-service                      -> http://localhost:8085
+api-gateway                      -> http://localhost:8000
 ```
 
-## Databases
+**Databases & Infrastructure**
 
-```text
+```
 sqlserver                    -> localhost:1433
 mongodb                      -> localhost:27017
 inventory-sqlserver          -> localhost:1435
 order-sqlserver              -> localhost:1436
 notification-sqlserver       -> localhost:1437
+rabbitmq                     -> localhost:5672 (AMQP), localhost:15672 (management UI)
+redis                        -> localhost:6379
 ```
 
-## Internal Docker URLs
+**Internal Docker URLs** (container-to-container communication)
 
-Inside Docker, services communicate using container names:
-
-```text
+```
 ProductCatalogService          -> http://product-catalog-service:8080
 ProductCatalogService Replica  -> http://product-catalog-service-replica:8080
 InventoryService               -> http://inventory-service:8080
 OrderService                   -> http://order-service:8080
-NotificationService            -> http://notification-service:8080
-BffService                     -> http://bff-service:8080
+NotificationService             -> http://notification-service:8080
+BffService                      -> http://bff-service:8080
 ```
 
 ---
 
-# Project Structure
+## Project Structure
 
-```text
-EcommerceMonolith
-|
-|-- BLL
-|-- Controllers
-|-- DAL
-|-- DTOs
-|-- Migrations
-|-- Models
-|
-|-- docs
-|   |
-|   |-- adr
-|   |   |-- 001-product-catalog-mongodb.md
-|   |   |-- 002-inventory-sql-server.md
-|   |   |-- 003-order-sql-server.md
-|   |   |-- 004-notification-sql-server.md
-|   |
-|   |-- screenshots
-|       |-- phase-3
-|           |-- 01-api-gateway-products.png
-|           |-- 02-bff-order-details.png
-|           |-- 03-load-balancing-roundrobin.png
-|
-|-- src
-|   |
-|   |-- ApiGateway
-|   |   |-- Dockerfile
-|   |   |-- Program.cs
-|   |   |-- appsettings.json
-|   |
-|   |-- BffService
-|   |   |-- Dockerfile
-|   |   |-- Program.cs
-|   |
-|   |-- ProductCatalogService
-|   |   |-- Controllers
-|   |   |-- Models
-|   |   |-- Services
-|   |   |-- Dockerfile
-|   |   |-- Program.cs
-|   |
-|   |-- InventoryService
-|   |   |-- Controllers
-|   |   |-- Data
-|   |   |-- DTOs
-|   |   |-- Models
-|   |   |-- Migrations
-|   |   |-- Dockerfile
-|   |   |-- Program.cs
-|   |
-|   |-- OrderService
-|   |   |-- Clients
-|   |   |-- Controllers
-|   |   |-- Data
-|   |   |-- DTOs
-|   |   |-- Models
-|   |   |-- Migrations
-|   |   |-- Dockerfile
-|   |   |-- Program.cs
-|   |
-|   |-- NotificationService
-|       |-- Controllers
-|       |-- DAL
-|       |-- DTOs
-|       |-- Models
-|       |-- Migrations
-|       |-- Services
-|       |-- Dockerfile
-|       |-- Program.cs
-|
-|-- Dockerfile
-|-- docker-compose.yml
-|-- .dockerignore
-|-- appsettings.json
-|-- Program.cs
-|-- README.md
+```
+EcommerceMonolith/
+│
+├── EcommerceMonolith.csproj          # original monolith
+├── Dockerfile
+├── docker-compose.yml
+│
+├── src/
+│   ├── ProductCatalogService/
+│   ├── InventoryService/
+│   ├── OrderService/
+│   ├── NotificationService/
+│   ├── BffService/
+│   ├── ApiGateway/
+│   └── MessagingContracts/
+│
+└── docs/
+    ├── adr/
+    └── screenshots/
+        ├── phase-3/
+        ├── phase-4/
+        └── phase-5/
 ```
 
 ---
 
-# Important Project Configuration
+## Tech Stack
 
-The monolith project excludes the `src` folder from compilation.
+**Backend**: .NET 8 Web API, C#, Entity Framework Core, MongoDB.Driver, YARP Reverse Proxy, RabbitMQ.Client, StackExchange.Redis, Swagger/OpenAPI
 
-This is needed because the new microservices are separate .NET projects inside the same repository, and the monolith should not try to compile their files.
+**Databases & Messaging**: SQL Server, MongoDB, RabbitMQ, Redis
 
-```xml
-<ItemGroup>
-  <Compile Remove="src\**\*.cs" />
-  <Content Remove="src\**\*" />
-  <None Remove="src\**\*" />
-  <EmbeddedResource Remove="src\**\*" />
-</ItemGroup>
-```
+**DevOps**: Docker, Docker Compose
 
 ---
 
-# Tech Stack
-
-## Backend
-
-* .NET 8 Web API
-* C#
-* Entity Framework Core
-* MongoDB.Driver
-* YARP Reverse Proxy
-* Swagger / OpenAPI
-
-## Databases
-
-* SQL Server
-* MongoDB
-
-## DevOps
-
-* Docker
-* Docker Compose
-
----
-
-# Run with Docker
-
-Make sure Docker Desktop is running.
-
-From the root project folder, run:
+## Run with Docker
 
 ```bash
 docker compose up --build
 ```
 
-Open the API Gateway:
+Open the API Gateway: `http://localhost:8000`
 
-```text
-http://localhost:8000
+Swagger UIs:
+
+```
+Monolith:              http://localhost:8080/swagger
+ProductCatalogService:  http://localhost:8081/swagger
+InventoryService:       http://localhost:8082/swagger
+OrderService:           http://localhost:8083/swagger
+NotificationService:    http://localhost:8084/swagger
+BffService:             http://localhost:8085/swagger
 ```
 
-Open Swagger for each directly exposed service:
+RabbitMQ management UI: `http://localhost:15672` (guest/guest)
 
-```text
-Monolith Swagger:              http://localhost:8080/swagger
-ProductCatalogService Swagger: http://localhost:8081/swagger
-InventoryService Swagger:      http://localhost:8082/swagger
-OrderService Swagger:          http://localhost:8083/swagger
-NotificationService Swagger:   http://localhost:8084/swagger
-BffService Swagger:            http://localhost:8085/swagger
-```
+The client should communicate through the API Gateway on port `8000`. Direct service ports remain exposed for development and debugging only.
 
-The client should communicate through the API Gateway on port `8000`.
-
-Direct service ports are kept exposed only for development and debugging.
-
-Stop the containers without deleting database volumes:
+Stop containers (keep data):
 
 ```bash
 docker compose down
 ```
 
-Stop the containers and delete database volumes:
+Stop containers and delete all volumes:
 
 ```bash
 docker compose down -v
@@ -820,205 +465,69 @@ docker compose down -v
 
 ---
 
-# Useful Commands
+## Verifying the System
 
-Build all projects:
-
-```bash
-dotnet build
-```
-
-Run all services:
+**Check container health**
 
 ```bash
-docker compose up --build
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ```
 
-Run all services and recreate containers:
+All core services should show `(healthy)`.
 
-```bash
-docker compose up --build --force-recreate
-```
+**Check health endpoints (PowerShell)**
 
-Add NotificationService migration:
+```powershell
+$urls = @(
+    "http://localhost:8000/health",
+    "http://localhost:8081/health",
+    "http://localhost:8086/health",
+    "http://localhost:8082/health",
+    "http://localhost:8083/health",
+    "http://localhost:8084/health",
+    "http://localhost:8085/health"
+)
 
-```bash
-dotnet ef migrations add InitialCreate --project src/NotificationService/NotificationService.csproj --startup-project src/NotificationService/NotificationService.csproj --output-dir Migrations
-```
-
----
-
-# How to Test Phase 2 End-to-End
-
-## 1. Create a Product
-
-Use ProductCatalogService:
-
-```text
-POST http://localhost:8081/api/Products
-```
-
-Example body:
-
-```json
-{
-  "name": "Laptop",
-  "description": "Business laptop",
-  "price": 3500,
-  "category": "Electronics",
-  "attributes": {
-    "brand": "Dell",
-    "ram": "16GB"
-  }
-}
-```
-
-Copy the returned product `id`.
-
-## 2. Create Inventory for the Product
-
-Use InventoryService:
-
-```text
-POST http://localhost:8082/api/Inventory
-```
-
-Example body:
-
-```json
-{
-  "productId": "PRODUCT_ID_FROM_STEP_1",
-  "quantityAvailable": 10,
-  "quantityReserved": 0
-}
-```
-
-## 3. Create an Order
-
-Use OrderService:
-
-```text
-POST http://localhost:8083/api/Orders
-```
-
-Example body:
-
-```json
-{
-  "customerEmail": "customer@test.com",
-  "items": [
-    {
-      "productId": "PRODUCT_ID_FROM_STEP_1",
-      "quantity": 2
+foreach ($url in $urls) {
+    try {
+        $result = Invoke-RestMethod -Uri $url -Method Get
+        Write-Host "$url -> $result"
+    } catch {
+        Write-Host "$url -> FAILED"
     }
-  ]
 }
 ```
 
-Expected result:
+**Test the full saga (create an order)**
 
-```text
-Status: Confirmed
-TotalAmount: price * quantity
-```
-
-## 4. Verify Inventory Was Reserved
-
-Use InventoryService:
-
-```text
-GET http://localhost:8082/api/Inventory/PRODUCT_ID_FROM_STEP_1
-```
-
-Expected result:
-
-```text
-QuantityAvailable decreased
-QuantityReserved increased
-```
-
-## 5. Verify Notification Was Created
-
-Use NotificationService:
-
-```text
-GET http://localhost:8084/api/Notifications
-```
-
-Expected result:
-
-```text
-Status: Confirmed
-Message: Order confirmed successfully.
-```
-
-## 6. Test Rejected Order
-
-Create an order with a quantity larger than the available stock.
-
-Expected result:
-
-```text
-Order status: Rejected
-TotalAmount: 0
-Notification status: Rejected
-```
-
----
-
-# How to Test Phase 3
-
-## 1. Test API Gateway
-
-```text
-GET http://localhost:8000/api/products
-```
-
-Expected result:
-
-```text
-Products are returned through the API Gateway.
-```
-
-## 2. Test Order Creation Through the Gateway
-
-```text
+```http
 POST http://localhost:8000/api/orders
-```
+Content-Type: application/json
 
-Example body:
-
-```json
 {
   "customerEmail": "customer@test.com",
   "items": [
-    {
-      "productId": "PRODUCT_ID_FROM_MONGODB",
-      "quantity": 1
-    }
+    { "productId": "PRODUCT_ID_FROM_MONGODB", "quantity": 1 }
   ]
 }
 ```
 
-Expected result:
+Then verify:
+- Order status becomes `Confirmed` or `Rejected` (`GET /api/orders/{id}`)
+- Inventory was reserved (`GET /api/inventory/{productId}`)
+- A notification was created (`GET /api/notifications`)
 
-```text
-Order is created through the API Gateway.
+**Test Redis cache**
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/api/products" -Method Get
+docker logs product-catalog-service | Select-String "CACHE"
+docker logs product-catalog-service-replica | Select-String "CACHE"
 ```
 
-## 3. Test BFF
+Expect one instance to log `CACHE MISS` and the other `CACHE HIT`, proving the cache is shared.
 
-```text
-GET http://localhost:8000/api/bff/orders/ORDER_ID/details
-```
-
-Expected result:
-
-```text
-A single response containing order, products, and notifications.
-```
-
-## 4. Test Load Balancing
+**Test load balancing**
 
 ```powershell
 1..10 | ForEach-Object {
@@ -1027,220 +536,53 @@ A single response containing order, products, and notifications.
 }
 ```
 
-Expected result:
-
-```text
-Two different X-Service-Instance values appear in the output.
-```
-
-This proves that the API Gateway distributes requests between two ProductCatalogService instances.
+Expect two different instance values across the 10 requests.
 
 ---
 
-# Business Logic
+## Architecture Decisions Summary
 
-## Monolith Business Logic
+Detailed ADRs are stored under `docs/adr`.
 
-In Phase 1, the monolith handled all business logic inside one application.
+| Service | Database | Reason |
+|---|---|---|
+| ProductCatalogService | MongoDB | Flexible, category-dependent product attributes |
+| InventoryService | SQL Server | Strong consistency required to prevent over-reservation |
+| OrderService | SQL Server | Financial/transactional data with relational structure |
+| NotificationService | SQL Server | Simple structured records (candidate for future document store if channels multiply) |
 
-When an order was created, the system checked whether all requested products existed and whether enough inventory was available.
+## Expected Problems in the Phase 1 Monolith
 
-If the order was valid:
+1. **Tight coupling** — a small change requires rebuilding/redeploying the whole app.
+2. **Limited independent scaling** — all features scale together even under uneven load.
+3. **Single database bottleneck** — one relational database becomes a performance risk and single point of failure.
 
-* The order status became `Confirmed`
-* The total amount was calculated
-* Inventory was decreased
+## Improvements Introduced
 
-If the order was invalid:
+**Phase 2** — service boundaries by business capability, database-per-service, polyglot persistence, independent deployability.
 
-* The order status became `Rejected`
-* The total amount was `0`
-* Inventory was not decreased
+**Phase 3** — single API Gateway entry point, BFF aggregation, load-balanced replicas.
 
-Rejected orders were still saved in the database for tracking and audit purposes.
+**Phase 4** — async choreography saga (decoupled, resilient to service downtime), idempotent consumers, shared distributed cache.
 
-## Microservices Business Logic
-
-In Phase 2, the same business flow is distributed between independent services.
-
-OrderService does not access another service's database directly.
-
-Instead, it communicates through HTTP APIs:
-
-```text
-OrderService
-    |
-    +--> ProductCatalogService
-    +--> InventoryService
-    +--> NotificationService
-```
-
-This keeps data ownership clear and follows the database-per-service pattern.
-
-In Phase 3, the client can access the system through the API Gateway instead of calling services directly.
+**Phase 5** — container-level and application-level health visibility for all core services.
 
 ---
 
-# Architecture Decisions Summary
+## Current Status
 
-Detailed ADR files are stored under:
+- Phase 1 — ✅ complete
+- Phase 2 — ✅ complete
+- Phase 3 — ✅ complete
+- Phase 4 — ✅ complete (messaging, saga, idempotency, Redis cache)
+- Phase 5 — ✅ health checks + Docker healthchecks complete
+- Phase 5 — ⏳ Serilog + Seq + full Correlation ID trace: planned, not yet implemented
 
-```text
-docs/adr
-```
-
-## ProductCatalogService � MongoDB
-
-Product catalog data is flexible and can vary by category.
-
-A document database fits this service because each product can store different attributes without requiring many relational tables or nullable columns.
-
-This is a good fit for a BASE-style, flexible document model where read flexibility is important.
-
-## InventoryService � SQL Server
-
-Inventory requires strong consistency.
-
-The system must avoid reserving more stock than is available.
-
-SQL Server is used because relational databases provide ACID transactions and a strong consistency model.
-
-## OrderService � SQL Server
-
-Orders include financial data, status changes, and order items.
-
-The relationship between orders and order items is naturally relational.
-
-SQL Server is used because order data benefits from ACID guarantees, structured relationships, and reliable persistence.
-
-## NotificationService � SQL Server
-
-NotificationService currently uses SQL Server to keep notification records in a simple structured table.
-
-In a future phase, this service could be moved to a document database if notifications become more flexible, for example if the system supports different notification channels such as email, SMS, push notifications, or webhooks.
-
----
-
-# Expected Problems in the Phase 1 Monolith
-
-The monolithic architecture was intentionally simple, but it has several expected problems at scale.
-
-## 1. Tight Coupling
-
-Orders, products, and inventory are all part of the same deployable application.
-
-A small change in one area requires rebuilding and redeploying the entire monolith.
-
-## 2. Limited Independent Scaling
-
-All features scale together, even if only one part of the system is under heavy load.
-
-For example, if product browsing receives high traffic, the entire monolith must be scaled, including order and inventory logic.
-
-## 3. Single Database Bottleneck
-
-All modules use the same relational database.
-
-As the system grows, this database can become a performance bottleneck and a single point of failure.
-
----
-
-# Improvements Introduced
-
-## Phase 2 Improvements
-
-Phase 2 improves the architecture by introducing:
-
-* Separate services by business capability
-* Separate databases per service
-* Clear data ownership
-* Polyglot persistence
-* Independent deployment boundaries
-* HTTP communication between services
-* A dedicated notification service
-
-## Phase 3 Improvements
-
-Phase 3 improves the architecture by introducing:
-
-* A single API Gateway entry point
-* Centralized routing through YARP
-* A BFF service for frontend-specific aggregation
-* Load balancing between two ProductCatalogService instances
-* Better separation between client-facing APIs and internal services
-
-The system is now closer to a production-style distributed architecture.
-
----
-
-# Current Status
-
-Phase 1 is complete.
-
-Phase 2 core implementation is complete.
-
-Phase 3 implementation is complete.
-
-The following Phase 2 flow works end-to-end:
-
-```text
-Create product in ProductCatalogService
-Create inventory in InventoryService
-Place order in OrderService
-OrderService reads product data
-OrderService reserves inventory
-OrderService saves the order
-OrderService creates notification in NotificationService
-NotificationService stores the notification
-```
-
-Confirmed order flow was tested successfully:
-
-```text
-Order status: Confirmed
-Notification status: Confirmed
-Inventory available quantity decreased
-Inventory reserved quantity increased
-```
-
-The following Phase 3 capabilities were tested successfully:
-
-```text
-API Gateway routes requests through port 8000
-BFF returns combined order details
-Load balancing distributes product requests between two ProductCatalogService instances
-```
-
----
-
-# Planned Next Phases
-
-## Phase 4 � Async Messaging, Saga and Caching
-
-The order flow will move from synchronous HTTP calls to asynchronous messaging.
-
-The system will include:
-
-* Message broker
-* Order Saga
-* Compensation flow
-* Redis cache using the cache-aside pattern
-
-## Phase 5 � Monitoring and Observability
-
-The system will include:
-
-* Structured logging
-* Health checks
-* Correlation ID across services and messages
-
----
-
-# Git Commands for Phase 3 Commit
+## Git Commands Used
 
 ```bash
 git status
 git add .
-git commit -m "Add phase 3 gateway BFF and load balancing"
+git commit -m "Add docker compose healthchecks"
 git push
 ```
